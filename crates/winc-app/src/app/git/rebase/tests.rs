@@ -79,3 +79,31 @@ fn a_reworded_commit_needs_a_message() {
     form.rows[0].message = Some(String::new());
     assert!(form.problem("anything").is_some());
 }
+
+#[test]
+fn squash_keeps_unselected_commits_and_combines_messages() {
+    let form = RebaseForm::squash(plan(&["a", "b", "c", "d"]), &["c".into(), "a".into()]).unwrap();
+    let names: Vec<_> = form.rows.iter().map(|r| r.commit.oid.as_str()).collect();
+    assert_eq!(names, ["a", "c", "b", "d"]);
+    assert_eq!(form.rows[0].message.as_deref(), Some("a\n\nc"));
+    assert_eq!(form.rows[0].action, RebaseAction::Reword);
+    assert_eq!(form.rows[1].action, RebaseAction::Fixup);
+    assert!(
+        form.rows[2..]
+            .iter()
+            .all(|r| r.action == RebaseAction::Pick)
+    );
+}
+
+#[test]
+fn squash_rejects_missing_duplicate_and_single_commits() {
+    for oids in [
+        vec!["a"],
+        vec!["a", "missing"],
+        vec!["a", "a"],
+        vec!["b", "c"],
+    ] {
+        let oids = oids.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        assert!(RebaseForm::squash(plan(&["a", "b", "c"]), &oids).is_err());
+    }
+}

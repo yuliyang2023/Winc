@@ -306,6 +306,10 @@ pub enum MenuCommand {
     LogNewTag,
     /// 从这个提交开始交互式变基。
     LogInteractiveRebase,
+    /// 编辑提交信息。
+    LogEditMessage,
+    /// 将选中的多个提交压缩到最早的提交。
+    LogSquashInto,
     /// 交互式变基列表一行的处理方式。
     RebaseAction(winc_editor::git::RebaseAction),
     /// 对提交上第几个标签做的事。
@@ -504,6 +508,8 @@ impl MenuCommand {
             MenuCommand::LogResetHard => t!("menu-log-reset-hard"),
             MenuCommand::LogNewTag => t!("menu-log-new-tag"),
             MenuCommand::LogTag(op, _) => op.label(),
+            MenuCommand::LogSquashInto => t!("menu-log-squash-into"),
+            MenuCommand::LogEditMessage => t!("menu-log-edit-message"),
             MenuCommand::LogInteractiveRebase => t!("menu-log-interactive-rebase"),
             MenuCommand::RebaseAction(action) => crate::app::git::rebase::action_label(action),
             MenuCommand::LogCopyOid => t!("menu-log-copy-oid"),

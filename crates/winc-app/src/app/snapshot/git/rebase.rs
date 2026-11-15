@@ -122,6 +122,8 @@ fn rewording_edits_the_message_and_enter_adds_a_line() {
     let dialog = app.overlays.form_dialog.as_ref().unwrap();
     assert_eq!(dialog.focus, DialogPart::Branch);
     assert_eq!(dialog.name.text(), "b");
+    let field = &mut app.overlays.form_dialog.as_mut().unwrap().name;
+    field.set_caret(field.text().len(), false);
     paint(&mut app);
     app.overlays
         .form_dialog
@@ -194,4 +196,186 @@ fn snapshot_rebase_dialog() {
     letter(&mut app, "f");
     std::thread::sleep(std::time::Duration::from_millis(400));
     shoot(&mut app, "git-rebase");
+}
+
+#[test]
+fn edit_message_opens_with_full_text_and_preserves_descendants() {
+    let Some((mut app, dir)) = rebasing("edit-commit-message") else {
+        return;
+    };
+    let commits = form(&app)
+        .rows
+        .iter()
+        .map(|row| row.commit.clone())
+        .collect();
+    let base = form(&app).base.clone();
+    app.close_form_dialog();
+    app.open_reword_dialog(winc_editor::git::RebasePlan {
+        base,
+        commits,
+        pushed: 0,
+    });
+    let dialog = app.overlays.form_dialog.as_ref().unwrap();
+    assert_eq!(dialog.focus, DialogPart::Branch);
+    assert_eq!(dialog.name.text(), "b");
+    assert_eq!(form(&app).rows[0].action, RebaseAction::Reword);
+    assert!(
+        form(&app).rows[1..]
+            .iter()
+            .all(|row| row.action == RebaseAction::Pick)
+    );
+    app.overlays
+        .form_dialog
+        .as_mut()
+        .unwrap()
+        .name
+        .set_text("edited subject\n\nbody");
+    assert!(app.dialog_key(&Key::Named(NamedKey::Enter), "", true));
+    assert_eq!(subjects(&dir), ["d", "c", "edited subject", "a"]);
+    for name in ["a", "b", "c", "d"] {
+        assert_eq!(
+            std::fs::read_to_string(dir.join(format!("{name}.txt"))).unwrap(),
+            name
+        );
+    }
+}
+
+#[test]
+fn squash_selected_commits_preserves_the_tree_and_other_commits() {
+    let Some((mut app, dir)) = rebasing("squash-selected") else {
+        return;
+    };
+    let commits: Vec<_> = form(&app)
+        .rows
+        .iter()
+        .map(|row| row.commit.clone())
+        .collect();
+    let oids = vec![commits[0].oid.clone(), commits[2].oid.clone()];
+    let base = form(&app).base.clone();
+    app.close_form_dialog();
+    app.open_squash_dialog(
+        winc_editor::git::RebasePlan {
+            base,
+            commits,
+            pushed: 0,
+        },
+        &oids,
+    );
+    let dialog = app.overlays.form_dialog.as_ref().unwrap();
+    assert_eq!(dialog.name.text(), "b\n\nd");
+    assert_eq!(dialog.focus, DialogPart::Branch);
+    app.overlays
+        .form_dialog
+        .as_mut()
+        .unwrap()
+        .name
+        .set_text("combined\n\nbody");
+    assert!(app.dialog_key(&Key::Named(NamedKey::Enter), "", true));
+    assert_eq!(subjects(&dir), ["c", "combined", "a"]);
+    for name in ["a", "b", "c", "d"] {
+        assert_eq!(
+            std::fs::read_to_string(dir.join(format!("{name}.txt"))).unwrap(),
+            name
+        );
+    }
+}
+
+#[test]
+fn editing_a_long_commit_message_starts_at_the_top_and_keeps_the_full_message() {
+    let Some((mut app, dir)) = rebasing("reword-long-message") else {
+        return;
+    };
+    let message = format!(
+        "完整提交标题\n\n{}\nCode Source From: Self Code\n\nAI Co-author: GPT-6.1-sol",
+        "正文内容与验证结果\n".repeat(20)
+    );
+    let mut commits: Vec<_> = form(&app)
+        .rows
+        .iter()
+        .map(|row| row.commit.clone())
+        .collect();
+    commits[0].message = message.clone();
+    let base = form(&app).base.clone();
+    app.close_form_dialog();
+    app.open_reword_dialog(winc_editor::git::RebasePlan {
+        base,
+        commits,
+        pushed: 0,
+    });
+    paint(&mut app);
+    let field = &app.overlays.form_dialog.as_ref().unwrap().name;
+    assert_eq!(field.text(), message);
+    assert_eq!(field.caret(), 0);
+    assert_eq!(field.view.scroll, 0.0);
+    let area = field.view.area;
+    let point = (area.x + area.w / 2.0, area.y + area.h / 2.0);
+    let target = app.scroll_target_at(point.0, point.1);
+    assert_eq!(target, crate::app::scroll::ScrollTarget::DialogMessage);
+    app.scroll_target_by(target, point, false, (0.0, -80.0));
+    paint(&mut app);
+    let field = &app.overlays.form_dialog.as_ref().unwrap().name;
+    assert_eq!(field.view.scroll, 80.0);
+    assert_eq!(field.caret(), 0);
+    assert_eq!(field.text(), message);
+    assert_eq!(form(&app).scroll, 0.0);
+    // 多次重绘不把滚轮滚动的位置拉回光标。
+    paint(&mut app);
+    assert_eq!(
+        app.overlays.form_dialog.as_ref().unwrap().name.view.scroll,
+        80.0
+    );
+    app.scroll_target_by(target, point, false, (0.0, -10000.0));
+    paint(&mut app);
+    let field = &app.overlays.form_dialog.as_ref().unwrap().name;
+    assert_eq!(field.view.scroll, field.view.vertical_scroll_max());
+    app.scroll_target_by(target, point, false, (0.0, 10000.0));
+    paint(&mut app);
+    assert_eq!(
+        app.overlays.form_dialog.as_ref().unwrap().name.view.scroll,
+        0.0
+    );
+    let layout = app.dialog_layout();
+    let bar_x = layout.branch.right() - 5.0;
+    app.click_form_dialog(bar_x, area.y + 1.0);
+    assert!(matches!(
+        app.pointer.drag,
+        crate::app::Drag::DialogMessageScrollbar { .. }
+    ));
+    app.hover_form_dialog(bar_x, area.bottom() + 100.0);
+    paint(&mut app);
+    let field = &app.overlays.form_dialog.as_ref().unwrap().name;
+    assert_eq!(field.view.scroll, field.view.vertical_scroll_max());
+    assert_eq!(field.caret(), 0);
+    app.pointer.drag = crate::app::Drag::None;
+    assert_eq!(
+        app.scroll_target_at(layout.list.x + 2.0, layout.list.y + 2.0),
+        crate::app::scroll::ScrollTarget::Dialog
+    );
+    assert_eq!(
+        app.scroll_target_at(0.0, 0.0),
+        crate::app::scroll::ScrollTarget::Blocked
+    );
+    let field = &mut app.overlays.form_dialog.as_mut().unwrap().name;
+    field.set_caret(field.text().len(), false);
+    paint(&mut app);
+    assert!(app.overlays.form_dialog.as_ref().unwrap().name.view.scroll > 0.0);
+    // 切走再切回，不能继承前一次的底部滚动位置。
+    app.set_rebase_action(1, RebaseAction::Reword);
+    app.set_rebase_action(0, RebaseAction::Reword);
+    paint(&mut app);
+    let field = &app.overlays.form_dialog.as_ref().unwrap().name;
+    assert_eq!(field.text(), message);
+    assert_eq!(field.view.scroll, 0.0);
+    assert!(app.dialog_key(&Key::Named(NamedKey::Enter), "", true));
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&dir)
+        .args(["log", "-1", "--format=%B", "HEAD~2"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap().trim_end(),
+        message.trim_end()
+    );
 }

@@ -319,9 +319,9 @@ enum Loaded {
         title: String,
         view: Result<Box<DiffView>, String>,
     },
-    /// 一个提交的补丁（[`Git::commit_patch`]），复制到剪贴板。
-    Patch {
-        oid: String,
+    /// 提交说明或补丁的完整复制结果，全部成功后一次写入剪贴板。
+    Clipboard {
+        copied: String,
         result: Result<String, String>,
     },
     /// 包含一个提交的分支（[`Git::containing_branches`]）。
@@ -802,6 +802,38 @@ impl App {
         LOG_LIST_PAD + if extra { self.fonts.line_height } else { 0.0 }
     }
 
+    /// 选择日志提交：Shift 连选，命令键切换单行选择。
+    pub(in crate::app) fn select_log_commits(&mut self, row: usize, range: bool, toggle: bool) {
+        let Some(view) = self.editor.active().and_then(|d| d.log.as_deref()) else {
+            return;
+        };
+        let Some(commit) = view.commits.get(row) else {
+            return;
+        };
+        let oid = commit.oid.clone();
+        let anchor = view.selection_anchor.or(view.selected).unwrap_or(row);
+        let mut selection = view.selected_commits.clone();
+        if range {
+            selection = view.commits[anchor.min(row)..=anchor.max(row)]
+                .iter()
+                .map(|c| c.oid.clone())
+                .collect();
+        } else if toggle {
+            if !selection.remove(&oid) {
+                selection.insert(oid);
+            }
+        } else {
+            self.select_log_row(row);
+            return;
+        }
+        self.select_log_row(row);
+        if let Some(view) = self.editor.active_mut().and_then(|d| d.log.as_deref_mut()) {
+            view.selected_commits = selection;
+            view.selection_anchor = Some(if range { anchor } else { row });
+        }
+        self.request_redraw();
+    }
+
     /// 选中当前日志标签中的第 `row` 个提交，使其在列表中可见，并在后台读取其详情。
     pub(crate) fn select_log_row(&mut self, row: usize) {
         let visible = ((self.log_parts().list.h - self.log_list_top()) / self.fonts.line_height)
@@ -820,6 +852,9 @@ impl App {
         let (oid, parent) = (commit.oid.clone(), commit.parents.first().cloned());
         self.git.log.file = None;
         view.selected = Some(row);
+        view.selected_commits.clear();
+        view.selected_commits.insert(oid.clone());
+        view.selection_anchor = Some(row);
         // 已选中的文字属于上一个提交的详情，因此清除。
         self.git.log.text_sel = None;
         let same = view.details.as_ref().is_some_and(|d| d.oid == oid);
@@ -925,19 +960,23 @@ impl App {
             LogTarget::Uncommitted => self.show_commit(),
             LogTarget::Row(row) | LogTarget::Avatar(row) => {
                 self.focus = Focus::Editor;
-                // `⌘` 点击另一个提交时，比较选中的提交与被点击的提交。
                 let selected = self
                     .editor
                     .active()
                     .and_then(|d| d.log.as_deref()?.selected);
-                match selected {
-                    Some(at) if self.command_held() && at != row => {
-                        self.compare_log_rows(at, row);
-                    }
-                    _ => {
-                        self.clear_log_compare();
-                        self.select_log_row(row);
-                    }
+                if let Some(at) = selected
+                    && self.command_held()
+                    && self.pointer.modifiers.alt_key()
+                    && at != row
+                {
+                    self.compare_log_rows(at, row);
+                } else {
+                    self.clear_log_compare();
+                    self.select_log_commits(
+                        row,
+                        self.pointer.modifiers.shift_key(),
+                        self.command_held(),
+                    );
                 }
             }
             LogTarget::File(i) => self.open_log_file(i),

@@ -215,7 +215,6 @@ git-log-details-parents = { $count ->
 git-log-local-diff-title = { $name } · { $rev } ↔ Local
 git-patch-merge = Git doesn’t create patches for merge commits
 git-log-copied-patch = Copied the patch of commit { $commit }
-git-log-patch-failed = Couldn’t create the patch: { $error }
 git-log-details-branches = Branches
 git-log-details-branches-loading = Looking…
 git-log-details-branches-none = Not on any branch
@@ -782,3 +781,10 @@ git-merge-side-result = Result
 git-rebase-hint = ↑↓ select · { $alt }↑↓ move · P R E S F D set action
 git-merge-conflict-title = Conflict { $index } of { $count }
 git-merge-edit-conflict = Edit Manually
+
+git-squash-invalid-selection = Select at least two commits on the current branch to squash.
+
+git-log-copied-oids = Copied { $count } commit hashes
+git-log-copied-messages = Copied full messages for { $count } commits
+git-log-copied-patches = Copied patches for { $count } commits
+git-log-copy-failed = Could not copy commits: { $error }

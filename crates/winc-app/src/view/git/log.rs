@@ -615,7 +615,10 @@ fn draw_list(
         // 比较两个版本时两端的提交均视为选中。
         let selected = match &view.compare {
             Some(c) => rev_matches(commit, &c.from) || rev_matches(commit, &c.to),
-            None => view.selected == Some(i),
+            None => {
+                view.selected_commits.contains(&commit.oid)
+                    || (view.selected_commits.is_empty() && view.selected == Some(i))
+            }
         };
         let hovered = matches!(app.pointer.hover, Hover::Log(LogTarget::Row(r) | LogTarget::Avatar(r)) if r == i);
         let fill = row_color(p, selected, focused, hovered);

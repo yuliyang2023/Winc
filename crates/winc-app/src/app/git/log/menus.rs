@@ -44,18 +44,53 @@ impl App {
         });
     }
 
-    /// 在后台取提交 `oid` 的补丁，取到后复制到剪贴板（见 [`Loaded::Patch`]）。
-    pub(super) fn copy_log_patch(&mut self, oid: String) {
+    /// 只有目标属于多选时才复制整个选择；直接对别的提交执行命令仍只复制它。
+    fn log_copy_targets(&self, oid: &str) -> Vec<String> {
+        let selected = self.log_selected_oids();
+        if selected.iter().any(|selected| selected == oid) {
+            selected
+        } else {
+            vec![oid.to_owned()]
+        }
+    }
+
+    /// 在后台读取全部说明或补丁，全部成功后一次写入剪贴板。
+    fn copy_log_text(&mut self, mut oids: Vec<String>, patch: bool) {
         let Some(root) = self.git.root.clone() else {
             return;
         };
+        let copied = if oids.len() > 1 {
+            if patch {
+                t!("git-log-copied-patches", count = oids.len())
+            } else {
+                t!("git-log-copied-messages", count = oids.len())
+            }
+        } else if patch {
+            t!("git-log-copied-patch", commit = short(&oids[0]))
+        } else {
+            t!("git-log-copied-message").to_owned()
+        };
+        // 邮件补丁按旧到新排列，允许直接交给 git am。
+        if patch {
+            oids.reverse();
+        }
         let sender = self.git.log.results.0.clone();
         self.spawn_git(UserEvent::GitLog, move |tool| {
-            let result = match tool {
-                Ok(git) => git.commit_patch(&root, &oid, &Cancel::default()),
-                Err(e) => Err(unusable(&e)),
-            };
-            let _ = sender.send(Loaded::Patch { oid, result });
+            let result = tool.map_err(|e| unusable(&e)).and_then(|git| {
+                let cancel = Cancel::default();
+                let parts = oids
+                    .iter()
+                    .map(|oid| {
+                        if patch {
+                            git.commit_patch(&root, oid, &cancel)
+                        } else {
+                            git.commit_message(&root, oid, &cancel)
+                        }
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(parts.join(if patch { "" } else { "\n\n" }))
+            });
+            let _ = sender.send(Loaded::Clipboard { copied, result });
         });
     }
 
@@ -70,7 +105,18 @@ impl App {
             return None;
         };
         self.focus = Focus::Editor;
-        self.select_log_row(row);
+        let selected = self
+            .editor
+            .active()
+            .and_then(|d| d.log.as_deref())
+            .is_some_and(|v| {
+                v.commits
+                    .get(row)
+                    .is_some_and(|c| v.selected_commits.contains(&c.oid))
+            });
+        if !selected {
+            self.select_log_row(row);
+        }
         let view = self.editor.active()?.log.as_deref()?;
         Some(view.commits.get(row)?.oid.clone())
     }
@@ -119,6 +165,8 @@ impl App {
             MenuCommand::LogNewBranch => self.open_branch_dialog(None, Some(oid)),
             MenuCommand::LogNewWorktree => self.new_worktree_at(oid, local_branch(&commit)),
             MenuCommand::LogNewTag => self.open_tag_prompt(oid),
+            MenuCommand::LogSquashInto => self.start_log_squash(),
+            MenuCommand::LogEditMessage => self.start_edit_commit_message(oid),
             MenuCommand::LogInteractiveRebase => self.start_interactive_rebase(oid),
             MenuCommand::LogTag(op, i) => {
                 let tag = commit.refs.iter().filter_map(tag_name).nth(i);
@@ -163,26 +211,30 @@ impl App {
                 );
             }
             MenuCommand::LogResetHard => self.confirm_log(LogConfirmed::ResetHard(oid)),
-            MenuCommand::LogCopyOid => {
-                self.flash(t!("git-log-copied-oid", commit = tag.as_str()));
-                self.set_clipboard(oid, false);
-            }
-            MenuCommand::LogCopyShortOid => {
-                self.flash(t!("git-log-copied-short-oid", commit = tag.as_str()));
-                self.set_clipboard(tag, false);
+            MenuCommand::LogCopyOid | MenuCommand::LogCopyShortOid => {
+                let oids = self.log_copy_targets(&oid);
+                let short_oid = command == MenuCommand::LogCopyShortOid;
+                let text = oids
+                    .iter()
+                    .map(|oid| if short_oid { short(oid) } else { oid.as_str() })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let copied = if oids.len() > 1 {
+                    t!("git-log-copied-oids", count = oids.len())
+                } else if short_oid {
+                    t!("git-log-copied-short-oid", commit = tag.as_str())
+                } else {
+                    t!("git-log-copied-oid", commit = tag.as_str())
+                };
+                self.flash(copied);
+                self.set_clipboard(text, false);
             }
             MenuCommand::LogGoTo => self.open_go_to_revision(),
-            MenuCommand::LogCopyPatch => self.copy_log_patch(oid),
-            MenuCommand::LogCopyMessage => {
-                let message = self
-                    .editor
-                    .active()
-                    .and_then(|d| d.log.as_deref()?.details.clone())
-                    .filter(|d| d.oid == oid)
-                    .and_then(|d| d.message)
-                    .unwrap_or(commit.subject);
-                self.flash(t!("git-log-copied-message"));
-                self.set_clipboard(message, false);
+            MenuCommand::LogCopyPatch | MenuCommand::LogCopyMessage => {
+                self.copy_log_text(
+                    self.log_copy_targets(&oid),
+                    command == MenuCommand::LogCopyPatch,
+                );
             }
             _ => {}
         }

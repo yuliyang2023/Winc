@@ -197,7 +197,6 @@ git-log-details-parents = { $count ->
 git-log-local-diff-title = { $name } · { $rev } ↔ 本地
 git-patch-merge = Git 不为合并提交生成补丁
 git-log-copied-patch = 已复制提交 { $commit } 的补丁
-git-log-patch-failed = 无法生成补丁：{ $error }
 git-log-details-branches = 所在分支
 git-log-details-branches-loading = 正在查找…
 git-log-details-branches-none = 不在任何分支上
@@ -615,3 +614,10 @@ git-merge-side-result = 结果
 git-rebase-hint = ↑↓ 选择 · { $alt }↑↓ 移动 · P R E S F D 设置操作
 git-merge-conflict-title = 冲突 { $index } / { $count }
 git-merge-edit-conflict = 手动编辑
+
+git-squash-invalid-selection = 请选择当前分支上的至少两个提交进行压缩。
+
+git-log-copied-oids = 已复制 { $count } 个提交号
+git-log-copied-messages = 已复制 { $count } 个提交的完整说明
+git-log-copied-patches = 已复制 { $count } 个提交的补丁
+git-log-copy-failed = 无法复制提交：{ $error }

@@ -98,6 +98,30 @@ impl RebaseForm {
         }
     }
 
+    /// 将所选提交移到最早的目标之后，保留未选中提交的相对顺序。
+    fn squash(plan: RebasePlan, oids: &[String]) -> Result<Self, String> {
+        let mut form = Self::new(plan);
+        let selected = |row: &RebaseRow| oids.contains(&row.commit.oid);
+        let count = form.rows.iter().filter(|row| selected(row)).count();
+        if count < 2 || count != oids.len() || !form.rows.first().is_some_and(selected) {
+            return Err(t!("git-squash-invalid-selection").to_owned());
+        }
+        let (mut chosen, others): (Vec<_>, Vec<_>) = form.rows.into_iter().partition(selected);
+        let message = chosen
+            .iter()
+            .map(|row| row.commit.message.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        for row in chosen.iter_mut().skip(1) {
+            row.action = RebaseAction::Fixup;
+        }
+        chosen[0].action = RebaseAction::Reword;
+        chosen[0].message = Some(message);
+        chosen.extend(others);
+        form.rows = chosen;
+        Ok(form)
+    }
+
     /// 返回不能开始的原因；可以开始或没有更改时返回 `None`。
     ///
     /// `editing` 是信息框的内容：选中行正在编辑的信息还没有存入该行。信息为空时 `git commit` 会
@@ -152,6 +176,50 @@ impl RebaseForm {
 }
 
 impl App {
+    /// 按日志顺序返回所选提交（新提交在前）。
+    pub(in crate::app) fn log_selected_oids(&self) -> Vec<String> {
+        self.editor
+            .active()
+            .and_then(|d| d.log.as_deref())
+            .map_or_else(Vec::new, |view| {
+                view.commits
+                    .iter()
+                    .filter(|c| view.selected_commits.contains(&c.oid))
+                    .map(|c| c.oid.clone())
+                    .collect()
+            })
+    }
+
+    /// 载入最早选中的提交到 HEAD 的范围。
+    pub(in crate::app) fn start_log_squash(&mut self) {
+        let oids = self.log_selected_oids();
+        if oids.len() < 2 {
+            return;
+        }
+        let oldest = oids.last().unwrap().clone();
+        self.git_operate_then(t!("git-op-rebase-load").into(), move |git, root| {
+            let plan = git.rebase_plan(root, &oldest)?;
+            // 在后台验证全部提交均在当前分支的范围里。
+            RebaseForm::squash(plan.clone(), &oids)?;
+            Ok((String::new(), Then::SquashPlan(Box::new(plan), oids)))
+        });
+    }
+
+    /// 打开已准备好的压缩计划，焦点直接放在合并信息上。
+    pub(in crate::app) fn open_squash_dialog(&mut self, plan: RebasePlan, oids: &[String]) {
+        if self.overlays.form_dialog.is_some() {
+            return;
+        }
+        match RebaseForm::squash(plan, oids) {
+            Ok(form) => {
+                let mut field = TextField::multiline();
+                load_message(&form, &mut field);
+                self.show_form_dialog(FormKind::Rebase(Box::new(form)), field, DialogPart::Branch);
+            }
+            Err(error) => self.notify(error),
+        }
+    }
+
     /// 打开交互式变基对话框。
     pub(super) fn open_rebase_dialog(&mut self, plan: RebasePlan) {
         if self.overlays.form_dialog.is_some() {
@@ -159,6 +227,23 @@ impl App {
         }
         let kind = FormKind::Rebase(Box::new(RebaseForm::new(plan)));
         self.show_form_dialog(kind, TextField::multiline(), DialogPart::RebaseList);
+    }
+
+    /// 打开范围并直接编辑目标提交的完整信息。
+    pub(in crate::app) fn open_reword_dialog(&mut self, plan: RebasePlan) {
+        if self.overlays.form_dialog.is_some() {
+            return;
+        }
+        self.open_rebase_dialog(plan);
+        self.set_rebase_action(0, RebaseAction::Reword);
+    }
+
+    /// 使用现有变基流程改写信息，保留后续提交。
+    pub(in crate::app) fn start_edit_commit_message(&mut self, oid: String) {
+        self.git_operate_then(t!("git-op-rebase-load").into(), move |git, root| {
+            git.rebase_plan(root, &oid)
+                .map(|plan| (String::new(), Then::RewordPlan(Box::new(plan))))
+        });
     }
 
     /// 读取从提交 `oid` 到 `HEAD` 的范围，打开交互式变基对话框。
@@ -341,6 +426,81 @@ impl App {
         }
     }
 
+    /// 消息框滚动条的轨道、滑块和滚动范围。
+    fn message_scrollbar(&self) -> Option<(winc_render::Rect, winc_render::Rect, f32)> {
+        let dialog = self.overlays.form_dialog.as_ref()?;
+        if !matches!(&dialog.kind, FormKind::Rebase(form) if form.rewording()) {
+            return None;
+        }
+        let view = &dialog.name.view;
+        let max = view.vertical_scroll_max();
+        if max <= 0.0 {
+            return None;
+        }
+        let track = winc_render::Rect::new(
+            self.dialog_layout().branch.right() - 12.0,
+            view.area.y,
+            12.0,
+            view.area.h,
+        );
+        let h = (track.h * track.h / (max + track.h)).max(12.0).min(track.h);
+        let thumb = winc_render::Rect::new(
+            track.x,
+            track.y + (track.h - h) * view.scroll / max,
+            track.w,
+            h,
+        );
+        Some((track, thumb, max))
+    }
+
+    /// 点击滑块开始拖动；点击轨道把滑块移到鼠标处。
+    pub(super) fn start_rebase_message_scrollbar(&mut self, x: f32, y: f32) -> bool {
+        let Some((track, thumb, _)) = self.message_scrollbar() else {
+            return false;
+        };
+        if !track.contains(x, y) {
+            return false;
+        }
+        let grab = if thumb.contains(x, y) {
+            y - thumb.y
+        } else {
+            thumb.h / 2.0
+        };
+        self.pointer.drag = crate::app::Drag::DialogMessageScrollbar { grab };
+        self.drag_rebase_message_scrollbar(y, grab);
+        true
+    }
+
+    /// 拖动消息框滑块，不改变光标和文本选区。
+    pub(super) fn drag_rebase_message_scrollbar(&mut self, y: f32, grab: f32) {
+        let Some((track, thumb, max)) = self.message_scrollbar() else {
+            return;
+        };
+        let travel = track.h - thumb.h;
+        let scroll = if travel > 0.0 {
+            ((y - grab - track.y) / travel).clamp(0.0, 1.0) * max
+        } else {
+            0.0
+        };
+        self.with_rebase(|_, field| {
+            field.view.scroll = scroll;
+            field.view.follow = Some((field.caret(), field.text().len()));
+        });
+        self.request_redraw();
+    }
+
+    /// 滚动消息框，保持光标和选区，下一帧不自动跳回光标。
+    pub(in crate::app) fn rebase_message_wheel(&mut self, dy: f32) {
+        self.with_rebase(|form, field| {
+            if form.rewording() {
+                field.view.scroll =
+                    (field.view.scroll - dy).clamp(0.0, field.view.vertical_scroll_max());
+                field.view.follow = Some((field.caret(), field.text().len()));
+            }
+        });
+        self.request_redraw();
+    }
+
     /// 在交互式变基对话框的列表上滚动 `dy`（逻辑像素）。
     pub(in crate::app) fn rebase_wheel(&mut self, dy: f32) {
         let list = self.dialog_layout().list;
@@ -406,7 +566,9 @@ fn load_message(form: &RebaseForm, field: &mut TextField) {
         .get(form.selected)
         .and_then(|row| row.message.as_deref());
     field.set_text(message.unwrap_or_default());
-    field.set_caret(field.text().len(), false);
+    // 从标题开始显示；光标放在末尾会让多行框自动滚到底部。
+    field.set_caret(0, false);
+    field.view = Default::default();
 }
 
 #[cfg(test)]

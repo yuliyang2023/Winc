@@ -370,6 +370,7 @@ impl App {
 
                 self.request_redraw();
             }
+            Drag::DialogMessageScrollbar { .. } => {}
             Drag::None => {}
         }
     }

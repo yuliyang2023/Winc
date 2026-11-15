@@ -644,7 +644,14 @@ impl App {
                         .status
                         .as_ref()
                         .is_some_and(|s| s.operation.is_some());
-                log_commit_menu(!busy, &self.current_branch_label(), &tags)
+                let mut menu = log_commit_menu(!busy, &self.current_branch_label(), &tags);
+                let multiple = self.log_selected_oids().len() > 1;
+                for entry in &mut menu {
+                    if let MenuEntry::Item(MenuCommand::LogSquashInto, enabled) = entry {
+                        *enabled &= multiple;
+                    }
+                }
+                menu
             }
             MenuTarget::LogColumns => self.log_columns_menu(),
             MenuTarget::LogDate | MenuTarget::LogPath | MenuTarget::LogAuthor => {

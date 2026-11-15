@@ -186,3 +186,7 @@ menu-commit-check-todo = 检查 TODO
 menu-commit-recent-messages = 最近的提交信息
 menu-commit-co-author = 添加共同作者
 menu-commit-no-verify = 本次提交跳过钩子
+
+menu-log-edit-message = 编辑提交信息…
+
+menu-log-squash-into = 压缩提交（Squash Into）…

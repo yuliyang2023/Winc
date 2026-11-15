@@ -464,7 +464,7 @@ fn shoot_git_log() {
         shoot(&mut app, &format!("log-select-{theme}"));
         app.git.log.text_sel = None;
 
-        // ⌘ 点击另一个提交：比较两者。
+        // ⌘⌥ 点击另一个提交：比较两者。
         let newer = app
             .editor
             .active()
@@ -476,7 +476,7 @@ fn shoot_git_log() {
             .iter()
             .position(|c| c.subject == "启动日志写到文件里")
             .unwrap();
-        app.pointer.modifiers = command_modifiers();
+        app.pointer.modifiers = command_modifiers() | ModifiersState::ALT;
         app.press_log(crate::app::git::log::LogTarget::Row(newer));
         app.pointer.modifiers = ModifiersState::empty();
         shoot(&mut app, &format!("log-compare-{theme}"));
@@ -1151,7 +1151,7 @@ fn an_open_log_follows_new_commits_and_moved_remote_branches() {
 }
 
 /// 修改上次提交之后，原来的提交不在日志中：按缩写的提交号转到它时固定在最前面并选中，再
-/// `⌘` 单击修改后的提交即可比较两者，固定的提交作为旧的一侧。转到已列出的提交时直接选中；
+/// `⌘⌥` 单击修改后的提交即可比较两者，固定的提交作为旧的一侧。转到已列出的提交时直接选中；
 /// 无法解析时提示原因，格式不对时无法提交。
 #[test]
 fn going_to_an_amended_away_commit_pins_it_for_comparison() {
@@ -1221,9 +1221,9 @@ fn going_to_an_amended_away_commit_pins_it_for_comparison() {
     assert_eq!(view.selected, Some(0));
     assert!(view.query.filtered());
 
-    // `⌘` 单击修改后的提交：比较两者，旧的在左。
+    // `⌘⌥` 单击修改后的提交：比较两者，旧的在左。
     let row = view.commits.iter().position(|c| c.oid == new).unwrap();
-    app.pointer.modifiers = command_modifiers();
+    app.pointer.modifiers = command_modifiers() | ModifiersState::ALT;
     app.press_log(LogTarget::Row(row));
     app.pointer.modifiers = Default::default();
     paint(&mut app);
@@ -1252,4 +1252,47 @@ fn going_to_an_amended_away_commit_pins_it_for_comparison() {
     assert_eq!(view.query.pin, None);
     assert_eq!(view.commits[view.selected.unwrap()].oid, new);
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn multiple_log_commits_can_be_selected_and_squashed_from_the_menu() {
+    use crate::app::git::form::FormKind;
+    use crate::app::git::log::LogTarget;
+    let Some((mut app, root)) = git_app("git-log-multi-squash", false) else {
+        return;
+    };
+    history_repo(&root, 8);
+    for message in ["one", "two", "three", "four"] {
+        git_in(&root, &["commit", "-q", "--allow-empty", "-m", message]);
+    }
+    app.git_refresh();
+    app.run_action(Action::GitShowLog);
+    paint(&mut app);
+    app.press_log(LogTarget::Row(0));
+    app.pointer.modifiers = ModifiersState::SHIFT;
+    app.press_log(LogTarget::Row(2));
+    assert_eq!(app.log_selected_oids().len(), 3);
+    app.pointer.modifiers = command_modifiers();
+    app.press_log(LogTarget::Row(1));
+    assert_eq!(app.log_selected_oids().len(), 2);
+    app.pointer.modifiers = ModifiersState::empty();
+    paint(&mut app);
+    let (rect, _) = app
+        .hits
+        .log
+        .iter()
+        .find(|(_, t)| *t == LogTarget::Row(0))
+        .unwrap();
+    let point = (rect.x + 150.0, rect.y + rect.h / 2.0);
+    let oid = app.log_context_target(point.0, point.1).unwrap();
+    assert_eq!(app.log_selected_oids().len(), 2);
+    app.run_log_commit_command(MenuCommand::LogSquashInto, &oid);
+    paint(&mut app);
+    let dialog = app.overlays.form_dialog.as_ref().unwrap();
+    let FormKind::Rebase(form) = &dialog.kind else {
+        panic!("expected squash plan");
+    };
+    assert_eq!(form.rows[0].action, winc_editor::git::RebaseAction::Reword);
+    assert_eq!(form.rows[1].action, winc_editor::git::RebaseAction::Fixup);
+    assert!(dialog.name.text().contains("\n\n"));
 }

@@ -1,0 +1,111 @@
+name: Build macOS 13 Intel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  remote-servers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/build-setup
+        with:
+          target: x86_64-unknown-linux-musl
+          source-sha: ${{ github.sha }}
+      # Build only the Linux servers here; macOS packaging consumes these artifacts.
+      - name: Compile Linux remote servers
+        timeout-minutes: 35
+        shell: bash
+        run: |
+          rustup target add aarch64-unknown-linux-musl
+          mkdir -p target/remote-server
+          for arch in x86_64 aarch64; do
+            target="$arch-unknown-linux-musl"
+            linker="CARGO_TARGET_$(echo "$target" | tr '[:lower:]-' '[:upper:]_')_LINKER"
+            env "$linker=rust-lld" cargo build --release --locked -p winc-server --target "$target"
+            cp "target/$target/release/winc-server" "target/remote-server/winc-server-Linux-$arch"
+          done
+          file target/remote-server/*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos13-remote-servers
+          path: target/remote-server/winc-server-Linux-*
+          if-no-files-found: error
+          retention-days: 7
+
+  build:
+    needs: remote-servers
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+      TARGET: x86_64-apple-darwin
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/build-setup
+        with:
+          target: x86_64-apple-darwin
+          source-sha: ${{ github.sha }}
+      - name: Check formatting
+        run: |
+          rustup component add rustfmt
+          cargo fmt --all -- --check
+      - name: Test commit message editing
+        run: cargo test --locked -p winc-app rebase
+      - name: Compile Intel application
+        run: cargo build --release --locked --target "$TARGET" -p winc -p winc-pty
+      - uses: actions/download-artifact@v8
+        with:
+          name: macos13-remote-servers
+          path: target/remote-server
+      - name: Verify remote server artifacts
+        run: |
+          test -s target/remote-server/winc-server-Linux-x86_64
+          test -s target/remote-server/winc-server-Linux-aarch64
+          chmod +x target/remote-server/winc-server-Linux-*
+          file target/remote-server/*
+      - name: Package application and DMG
+        run: |
+          bash release/macos/package.sh app "$TARGET"
+          app="target/$TARGET/release/bundle/macos/winc.app"
+          /usr/libexec/PlistBuddy -c 'Set :LSMinimumSystemVersion 13.0' "$app/Contents/Info.plist"
+          codesign --force --sign - "$app"
+          codesign --verify --deep --strict "$app"
+          bash release/macos/package.sh dmg "$TARGET"
+      - name: Verify architecture and minimum OS of bundled Mach-O files
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re, subprocess
+          app = pathlib.Path('target') / os.environ['TARGET'] / 'release/bundle/macos/winc.app'
+          count = 0
+          for path in app.rglob('*'):
+              if not path.is_file() or path.is_symlink():
+                  continue
+              kind = subprocess.check_output(['file', '-b', str(path)], text=True)
+              if 'Mach-O' not in kind:
+                  continue
+              subprocess.run(['lipo', str(path), '-verify_arch', 'x86_64'], check=True)
+              headers = subprocess.check_output(['otool', '-arch', 'x86_64', '-l', str(path)], text=True)
+              versions = re.findall(r'^\s*minos\s+(\d+(?:\.\d+)*)\s*$', headers, re.M)
+              versions += re.findall(r'cmd LC_VERSION_MIN_MACOSX\s+cmdsize \d+\s+version (\d+(?:\.\d+)*)', headers)
+              assert versions, f'No minimum OS found: {path}'
+              for version in versions:
+                  parts = tuple(map(int, version.split('.')))
+                  assert (parts + (0, 0))[:2] <= (13, 0), f'{path} requires macOS {version}'
+              count += 1
+          assert count >= 2, 'Missing application binaries'
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Winc-macos13-intel
+          path: target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          compression-level: 0

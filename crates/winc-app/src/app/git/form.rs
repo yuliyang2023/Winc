@@ -765,6 +765,9 @@ impl App {
 
     /// 处理对话框打开时的鼠标按下：点击卡片外部时关闭对话框，点击部件时执行其操作。
     pub(in crate::app) fn click_form_dialog(&mut self, x: f32, y: f32) {
+        if self.start_rebase_message_scrollbar(x, y) {
+            return;
+        }
         let layout = self.dialog_layout();
         if !layout.card.contains(x, y) {
             // 点击卡片外部不关闭询问对话框：关闭表示取消，会使正在进行的操作失败。
@@ -835,6 +838,10 @@ impl App {
 
     /// 对话框打开时移动鼠标：只认对话框里的部件；在输入框里拖动时选择文字。
     pub(in crate::app) fn hover_form_dialog(&mut self, x: f32, y: f32) {
+        if let crate::app::Drag::DialogMessageScrollbar { grab } = self.pointer.drag {
+            self.drag_rebase_message_scrollbar(y, grab);
+            return;
+        }
         let part = self.dialog_part_at(x, y);
         if let Some(dialog) = &mut self.overlays.form_dialog
             && dialog.hover != part

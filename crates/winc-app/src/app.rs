@@ -698,6 +698,10 @@ enum Drag {
         bar: Scrollbar,
         grab: f32,
     },
+    /// 拖动变基消息框的滚动条。
+    DialogMessageScrollbar {
+        grab: f32,
+    },
     /// 在当前持有焦点的输入框中拖选文字。
     Field,
     /// 在差异右侧拖选：`unit` 为扩展单位（字、词或行），`origin` 为按下时选中的范围

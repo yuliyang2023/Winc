@@ -186,6 +186,16 @@ pub struct FieldView {
 }
 
 impl FieldView {
+    /// 多行框按完整显示行计算的最大纵向滚动量，与绘制时的限制一致。
+    pub fn vertical_scroll_max(&self) -> f32 {
+        if self.line_height <= 0.0 {
+            return 0.0;
+        }
+        let visible = (self.area.h / self.line_height).floor().max(1.0) as u32;
+        let count = self.rows.last().copied().unwrap_or(0) + 1;
+        count.saturating_sub(visible) as f32 * self.line_height
+    }
+
     /// 返回输入框内横坐标 `x`（逻辑像素）处最近的字素边界的字节偏移。
     pub fn position_at(&self, x: f32) -> usize {
         let x = x - self.origin;

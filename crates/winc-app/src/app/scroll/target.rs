@@ -14,8 +14,10 @@ pub(crate) enum ScrollTarget {
     Blocked,
     /// 窗口内的菜单：滚动鼠标所在的一级。
     Popup,
-    /// 对话框打开时只滚动交互式变基的列表，下方的内容不滚动。
+    /// 交互式变基的提交列表。
     Dialog,
+    /// 交互式变基的提交信息编辑框。
+    DialogMessage,
     /// 设置浮层的分组区；`false` 表示浮层打开而位置不在分组区上，不滚动。
     Settings(bool),
     /// 终端查找条；`true` 表示位于输入框上，文字过长时横向滚动输入框。
@@ -90,8 +92,17 @@ impl App {
         if self.popup().is_some() {
             return ScrollTarget::Popup;
         }
-        if self.overlays.form_dialog.is_some() {
-            return ScrollTarget::Dialog;
+        if let Some(dialog) = &self.overlays.form_dialog {
+            if matches!(&dialog.kind, crate::app::git::form::FormKind::Rebase(_)) {
+                let layout = self.dialog_layout();
+                if layout.branch.contains(x, y) {
+                    return ScrollTarget::DialogMessage;
+                }
+                if layout.list.contains(x, y) {
+                    return ScrollTarget::Dialog;
+                }
+            }
+            return ScrollTarget::Blocked;
         }
         let x = if self.in_merge_pane(x, y) {
             l.text.x
@@ -182,6 +193,7 @@ impl App {
                 self.pointer.mouse = mouse;
             }
             ScrollTarget::Dialog => self.rebase_wheel(dy),
+            ScrollTarget::DialogMessage => self.rebase_message_wheel(dy),
             ScrollTarget::Settings(true) => self.settings_scroll_by(dy),
             ScrollTarget::TerminalFind(on_field) => {
                 if let Some(find) = self.terminal.find.as_mut().filter(|_| on_field) {

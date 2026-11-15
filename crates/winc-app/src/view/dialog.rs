@@ -479,7 +479,9 @@ fn draw_rebase(app: &mut App, frame: &mut Frame<'_>, layout: &DialogLayout) {
         field_focused && rewording,
         false,
     );
-    let area = rect.inset(DIALOG_FIELD_INSET, 6.0);
+    let mut area = rect.inset(DIALOG_FIELD_INSET, 6.0);
+    // 为消息框的滚动条留出空间，长行不会画到滑块下面。
+    area.w = (area.w - 8.0).max(1.0);
     if let Some(mut dialog) = app.overlays.form_dialog.take() {
         let focused = field_focused && rewording;
         let wrap = super::fields::wrap_area_field(app, frame, area.w, &mut dialog.name, focused);
@@ -493,6 +495,14 @@ fn draw_rebase(app: &mut App, frame: &mut Frame<'_>, layout: &DialogLayout) {
             placeholder,
             focused,
         );
+        let max = dialog.name.view.vertical_scroll_max();
+        if max > 0.0 {
+            let content = max + area.h;
+            let h = (area.h * area.h / content).max(12.0).min(area.h);
+            let y = area.y + (area.h - h) * (dialog.name.view.scroll / max);
+            let thumb = Rect::new(rect.right() - 7.0, y, 3.0, h);
+            frame.rect_clipped(thumb, p.text_dim.alpha(0.65), 1.5, rect);
+        }
         app.overlays.form_dialog = Some(dialog);
         if caret.is_some() {
             app.ime.cursor = caret;

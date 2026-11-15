@@ -160,11 +160,11 @@ fn log_compares_two_commits_or_a_branch_and_the_branch_menu_stashes() {
             .clone()
     };
 
-    // 选中「补充使用说明」，⌘ 点击「登录：账号密码表单」：较旧的提交（登录）在左，较新的在右。
+    // 选中「补充使用说明」，⌘⌥ 点击「登录：账号密码表单」：较旧的提交（登录）在左，较新的在右。
     let readme = row_of(&app, "补充使用说明");
     let login = row_of(&app, "登录：账号密码表单");
     app.press_log(LogTarget::Row(readme));
-    app.pointer.modifiers = command_modifiers();
+    app.pointer.modifiers = command_modifiers() | ModifiersState::ALT;
     app.press_log(LogTarget::Row(login));
     app.pointer.modifiers = ModifiersState::empty();
     let c = compare(&app).expect("在比较");
@@ -278,4 +278,112 @@ fn the_log_opens_from_the_commit_view_button_and_the_branch_menu_starts_with_fet
         Some("下载远程更新，不修改本地分支")
     );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn log_copy_commands_copy_every_selected_commit_and_full_messages() {
+    let Some((mut app, root)) = git_app("git-log-copy-multiple", false) else {
+        return;
+    };
+    history_repo(&root, 8);
+    for n in 0..3 {
+        std::fs::write(root.join(format!("copy-{n}.txt")), format!("content {n}\n")).unwrap();
+        git_in(&root, &["add", "."]);
+        git_in(
+            &root,
+            &[
+                "commit",
+                "-q",
+                "-m",
+                &format!("copy subject {n}\n\n完整正文 {n}\n\nTrailer: value-{n}"),
+            ],
+        );
+    }
+    app.git_refresh();
+    show_all_log(&mut app);
+    paint(&mut app);
+    app.select_log_commits(0, false, false);
+    app.select_log_commits(2, true, false);
+    let oids = app.log_selected_oids();
+    assert_eq!(oids.len(), 3);
+    // 右键所在提交不必是最后一次点击的行，选择应保持不变。
+    let target = oids[0].clone();
+    app.run_log_commit_command(MenuCommand::LogCopyOid, &target);
+    assert_eq!(
+        app.clipboard.copied.as_deref(),
+        Some(oids.join("\n").as_str())
+    );
+    app.run_log_commit_command(MenuCommand::LogCopyShortOid, &target);
+    let short = oids
+        .iter()
+        .map(|oid| &oid[..7])
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(app.clipboard.copied.as_deref(), Some(short.as_str()));
+    // 没有预先加载详情时也必须读取完整说明，不能退回只有标题。
+    app.editor
+        .active_mut()
+        .unwrap()
+        .log
+        .as_deref_mut()
+        .unwrap()
+        .details = None;
+    app.run_log_commit_command(MenuCommand::LogCopyMessage, &target);
+    app.poll_log();
+    let expected = (0..3)
+        .rev()
+        .map(|n| format!("copy subject {n}\n\n完整正文 {n}\n\nTrailer: value-{n}"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    assert_eq!(app.clipboard.copied.as_deref(), Some(expected.as_str()));
+    app.run_log_commit_command(MenuCommand::LogCopyPatch, &target);
+    app.poll_log();
+    let patch = app.clipboard.copied.clone().unwrap();
+    let positions: Vec<_> = oids
+        .iter()
+        .rev()
+        .map(|oid| patch.find(&format!("From {oid} ")).unwrap())
+        .collect();
+    assert!(positions.windows(2).all(|p| p[0] < p[1]));
+    assert_eq!(patch.matches("\nSubject:").count(), 3);
+    for n in 0..3 {
+        assert!(patch.contains(&format!("+++ b/copy-{n}.txt")));
+    }
+    // 目标在多选之外时，单提交命令不能错误地复制旧选择。
+    let outside = app.editor.active().unwrap().log.as_deref().unwrap().commits[3]
+        .oid
+        .clone();
+    app.run_log_commit_command(MenuCommand::LogCopyOid, &outside);
+    assert_eq!(app.clipboard.copied.as_deref(), Some(outside.as_str()));
+    // 混入不能生成邮件补丁的合并提交时，不能把部分结果写进剪贴板。
+    let merge = app
+        .editor
+        .active()
+        .unwrap()
+        .log
+        .as_deref()
+        .unwrap()
+        .commits
+        .iter()
+        .position(|c| c.parents.len() > 1)
+        .unwrap();
+    app.select_log_commits(merge, false, true);
+    app.run_log_commit_command(MenuCommand::LogCopyPatch, &target);
+    app.poll_log();
+    assert_eq!(app.clipboard.copied.as_deref(), Some(outside.as_str()));
+    // 单选、没有详情缓存时也能复制完整正文。
+    app.select_log_row(0);
+    app.editor
+        .active_mut()
+        .unwrap()
+        .log
+        .as_deref_mut()
+        .unwrap()
+        .details = None;
+    app.run_log_commit_command(MenuCommand::LogCopyMessage, &target);
+    app.poll_log();
+    assert_eq!(
+        app.clipboard.copied.as_deref(),
+        Some("copy subject 2\n\n完整正文 2\n\nTrailer: value-2")
+    );
 }

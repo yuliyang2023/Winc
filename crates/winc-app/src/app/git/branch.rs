@@ -158,6 +158,10 @@ pub(super) enum Then {
     Rescan,
     /// 读取好了交互式变基的范围：打开对话框，不说做完了。
     RebasePlan(Box<winc_editor::git::RebasePlan>),
+    /// 载入范围后直接编辑首个提交的信息。
+    RewordPlan(Box<winc_editor::git::RebasePlan>),
+    /// 压缩多个提交前载入的范围及选中的提交号。
+    SquashPlan(Box<winc_editor::git::RebasePlan>, Vec<String>),
     /// 检查完要移除的工作树：确认以后移除（[`App::confirm_remove_worktree`]），不说做完了。
     ConfirmRemove(RemoveCheck),
     /// 同步需要强制推送：确认以后推送（[`App::confirm_force_push`]），不说做完了；内容是上游将被
@@ -803,7 +807,9 @@ impl App {
                         Then::ConfirmRemove(_)
                         | Then::ConfirmForcePush(_)
                         | Then::ConfirmForceDelete(_)
-                        | Then::RebasePlan(_),
+                        | Then::RebasePlan(_)
+                        | Then::RewordPlan(_)
+                        | Then::SquashPlan(..),
                     )) => {}
                     Ok((_, Then::Warn(warning))) => self.notify(warning),
                     Ok((_, then)) => {
@@ -832,6 +838,8 @@ impl App {
                 Ok((_, Then::ConfirmRemove(check))) => self.confirm_remove_worktree(check),
                 Ok((_, Then::ConfirmForcePush(count))) => self.confirm_force_push(count),
                 Ok((_, Then::Warn(warning))) => self.notify(warning),
+                Ok((_, Then::SquashPlan(plan, oids))) => self.open_squash_dialog(*plan, &oids),
+                Ok((_, Then::RewordPlan(plan))) => self.open_reword_dialog(*plan),
                 Ok((_, Then::RebasePlan(plan))) => self.open_rebase_dialog(*plan),
                 Ok((_, Then::ConfirmForceDelete(name))) => self.confirm_force_delete_branch(name),
                 Ok((summary, then)) => {

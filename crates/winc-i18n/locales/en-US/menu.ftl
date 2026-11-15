@@ -192,3 +192,7 @@ menu-commit-check-todo = Check TODOs
 menu-commit-recent-messages = Recent Commit Messages
 menu-commit-co-author = Add Co-Author
 menu-commit-no-verify = Skip Hooks for This Commit
+
+menu-log-edit-message = Edit Commit Message…
+
+menu-log-squash-into = Squash Into…

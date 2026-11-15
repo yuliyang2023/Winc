@@ -85,12 +85,12 @@ impl App {
                     }
                     Err(e) => self.notify(e),
                 },
-                Loaded::Patch { oid, result } => match result {
+                Loaded::Clipboard { copied, result } => match result {
                     Ok(patch) => {
                         self.set_clipboard(patch, false);
-                        self.flash(t!("git-log-copied-patch", commit = short(&oid)));
+                        self.flash(copied);
                     }
-                    Err(e) => self.notify(t!("git-log-patch-failed", error = e)),
+                    Err(e) => self.notify(t!("git-log-copy-failed", error = e)),
                 },
                 Loaded::Branches { doc, oid, result } => {
                     self.git.log.branches_fetching.remove(&oid);

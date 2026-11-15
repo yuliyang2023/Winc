@@ -54,7 +54,7 @@ impl App {
             }
             _ => return,
         };
-        self.select_log_row(row);
+        self.select_log_commits(row, self.pointer.modifiers.shift_key(), false);
     }
 
     /// 处理焦点位于详情文件列表时的按键。

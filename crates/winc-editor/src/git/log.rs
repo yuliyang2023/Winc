@@ -38,6 +38,10 @@ pub struct LogView {
     pub error: Option<String>,
     /// 选中的提交（`commits` 的下标）。
     pub selected: Option<usize>,
+    /// 多选的提交号；重取日志时清除，避免旧下标指向别的提交。
+    pub selected_commits: std::collections::BTreeSet<String>,
+    /// Shift 选择的起点。
+    pub selection_anchor: Option<usize>,
     /// 选中的提交的详情；取回来之前只有提交号。
     pub details: Option<Details>,
     /// 换选中项之前已经取齐的详情。
@@ -275,6 +279,8 @@ impl LogView {
         self.head = None;
         self.lanes = Graph::default();
         self.selected = None;
+        self.selected_commits.clear();
+        self.selection_anchor = None;
     }
 
     /// 下一批从第几个提交继续取；重取时从头。
